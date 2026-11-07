@@ -1,0 +1,100 @@
+
+name: Build NEXORA APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - nexora-stage3-test
+    paths:
+      - 'NEXORA-Stage4b.zip'
+      - 'LiquidBrowser.zip'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Locate Android SDK
+        run: |
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
+          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+      - name: Accept SDK licenses and install packages
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager | head -n 1)
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "Android SDK command-line tools not found"
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --licenses || true
+
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
+      - name: Extract NEXORA project
+        run: |
+          mkdir -p extracted
+
+          if [ -f NEXORA-Stage4b.zip ]; then
+            unzip -q NEXORA-Stage4b.zip -d extracted
+          elif [ -f LiquidBrowser.zip ]; then
+            unzip -q LiquidBrowser.zip -d extracted
+          elif [ -f LiquidBrowser/build.gradle.kts ]; then
+            cp -r LiquidBrowser extracted/
+          elif [ -f build.gradle.kts ] && [ -f app/build.gradle.kts ]; then
+            cp -r . extracted/project
+          else
+            echo "No supported NEXORA project found"
+            exit 1
+          fi
+
+          if [ -f extracted/LiquidBrowser/build.gradle.kts ]; then
+            echo "PROJECT_DIR=$GITHUB_WORKSPACE/extracted/LiquidBrowser" >> $GITHUB_ENV
+          elif [ -f extracted/project/build.gradle.kts ]; then
+            echo "PROJECT_DIR=$GITHUB_WORKSPACE/extracted/project" >> $GITHUB_ENV
+          else
+            echo "Could not locate Android project"
+            find extracted -maxdepth 3 -type f
+            exit 1
+          fi
+
+      - name: Build NEXORA Debug APK
+        run: |
+          gradle --no-daemon \
+            -p "$PROJECT_DIR" \
+            clean assembleDebug
+
+      - name: Upload NEXORA APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NEXORA-debug-apk
+          path: extracted/LiquidBrowser/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
